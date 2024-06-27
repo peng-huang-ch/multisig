@@ -23,7 +23,7 @@ use anchor_lang::solana_program::instruction::Instruction;
 use std::convert::Into;
 use std::ops::Deref;
 
-declare_id!("msigUdDBsR4zSUYqYEDrc1LcgtmuSDDM7KxpRUXNC6U");
+declare_id!("863GdS1bjSSfyLSvR5JAWaqXTtsM8aR4c2vcK4vDLF8G");
 
 #[program]
 pub mod coral_multisig {
@@ -39,9 +39,9 @@ pub mod coral_multisig {
         assert_unique_owners(&owners)?;
         require!(
             threshold > 0 && threshold <= owners.len() as u64,
-            InvalidThreshold
+            ErrorCode::InvalidThreshold
         );
-        require!(!owners.is_empty(), InvalidOwnersLen);
+        require!(!owners.is_empty(), ErrorCode::InvalidOwnersLen);
 
         let multisig = &mut ctx.accounts.multisig;
         multisig.owners = owners;
@@ -100,27 +100,29 @@ pub mod coral_multisig {
 
     // Set owners and threshold at once.
     pub fn set_owners_and_change_threshold<'info>(
-        ctx: Context<'_, '_, '_, 'info, Auth<'info>>,
+        ctx: Context<Auth>,
         owners: Vec<Pubkey>,
         threshold: u64,
     ) -> Result<()> {
-        set_owners(
-            Context::new(
-                ctx.program_id,
-                ctx.accounts,
-                ctx.remaining_accounts,
-                ctx.bumps.clone(),
-            ),
-            owners,
-        )?;
-        change_threshold(ctx, threshold)
+        assert_unique_owners(&owners)?;
+        require!(!owners.is_empty(), ErrorCode::InvalidOwnersLen);
+        let multisig = &mut ctx.accounts.multisig;
+
+        if (owners.len() as u64) < multisig.threshold {
+            multisig.threshold = owners.len() as u64;
+        }
+
+        multisig.owners = owners;
+        multisig.owner_set_seqno += 1;
+        multisig.threshold = threshold;
+        Ok(())
     }
 
     // Sets the owners field on the multisig. The only way this can be invoked
     // is via a recursive call from execute_transaction -> set_owners.
     pub fn set_owners(ctx: Context<Auth>, owners: Vec<Pubkey>) -> Result<()> {
         assert_unique_owners(&owners)?;
-        require!(!owners.is_empty(), InvalidOwnersLen);
+        require!(!owners.is_empty(), ErrorCode::InvalidOwnersLen);
 
         let multisig = &mut ctx.accounts.multisig;
 
@@ -138,7 +140,7 @@ pub mod coral_multisig {
     // invoked is via a recursive call from execute_transaction ->
     // change_threshold.
     pub fn change_threshold(ctx: Context<Auth>, threshold: u64) -> Result<()> {
-        require!(threshold > 0, InvalidThreshold);
+        require!(threshold > 0, ErrorCode::InvalidThreshold);
         if threshold > ctx.accounts.multisig.owners.len() as u64 {
             return Err(ErrorCode::InvalidThreshold.into());
         }
@@ -244,8 +246,11 @@ pub struct ExecuteTransaction<'info> {
 
 #[account]
 pub struct Multisig {
+    /// Members of the multisig.
     pub owners: Vec<Pubkey>,
+    /// Threshold for signatures.
     pub threshold: u64,
+    /// Nonce for the multisig PDA seed.
     pub nonce: u8,
     pub owner_set_seqno: u32,
 }
@@ -256,7 +261,7 @@ pub struct Transaction {
     pub multisig: Pubkey,
     // Target program to execute against.
     pub program_id: Pubkey,
-    // Accounts requried for the transaction.
+    // Accounts required for the transaction.
     pub accounts: Vec<TransactionAccount>,
     // Instruction data for the transaction.
     pub data: Vec<u8>,
@@ -308,7 +313,7 @@ fn assert_unique_owners(owners: &[Pubkey]) -> Result<()> {
     for (i, owner) in owners.iter().enumerate() {
         require!(
             !owners.iter().skip(i + 1).any(|item| item == owner),
-            UniqueOwners
+            ErrorCode::UniqueOwners
         )
     }
     Ok(())
